@@ -24,6 +24,7 @@ import {
 } from 'react-router-dom';
 
 import {
+  getCurrentSessionId,
   getFirstName,
   getLastName,
   isLoggedIn,
@@ -31,13 +32,12 @@ import {
   onLoginLogout,
 } from '../../account/session';
 import { isDevelopment } from '../../common/constants';
-import { database } from '../../common/database';
 import * as models from '../../models';
 import {
   defaultOrganization,
   isDefaultOrganization,
-  Organization } from '../../models/organization';
-import { isRemoteProject } from '../../models/project';
+  Organization,
+} from '../../models/organization';
 import { Settings } from '../../models/settings';
 import { isDesign } from '../../models/workspace';
 import { reloadPlugins } from '../../plugins';
@@ -45,8 +45,9 @@ import { createPlugin } from '../../plugins/create';
 import { setTheme } from '../../plugins/misc';
 import { exchangeCodeForToken } from '../../sync/git/github-oauth-provider';
 import { exchangeCodeForGitLabToken } from '../../sync/git/gitlab-oauth-provider';
-import { initializeProjectFromTeam } from '../../sync/vcs/initialize-model-from';
-import { getVCS } from '../../sync/vcs/vcs';
+import FileSystemDriver from '../../sync/store/drivers/file-system-driver';
+import { MergeConflict, Team } from '../../sync/types';
+import { getVCS, initVCS } from '../../sync/vcs/vcs';
 import { submitAuthCode } from '../auth-session-provider';
 import { WorkspaceDropdown } from '../components/dropdowns/workspace-dropdown';
 import { GitHubStarsButton } from '../components/github-stars-button';
@@ -62,7 +63,9 @@ import {
   SettingsModal,
   showSettingsModal,
   TAB_INDEX_PLUGINS,
-  TAB_INDEX_THEMES } from '../components/modals/settings-modal';
+  TAB_INDEX_THEMES,
+} from '../components/modals/settings-modal';
+import { SyncMergeModal } from '../components/modals/sync-merge-modal';
 import { Toast } from '../components/toast';
 import { AppHooks } from '../containers/app-hooks';
 import { AIProvider } from '../context/app/ai-context';
@@ -81,30 +84,80 @@ export interface RootLoaderData {
 // This "workaround" will not work if a user logs out and back in again
 let hasRun = false;
 export const loader: LoaderFunction = async (): Promise<RootLoaderData> => {
-  // Load all projects
-  try {
-    const vcs = getVCS();
-    if (vcs && isLoggedIn() && !hasRun) {
-      const teams = await vcs.teams();
-      const projects = await Promise.all(teams.map(initializeProjectFromTeam));
-      await database.batchModifyDocs({ upsert: projects });
-      hasRun = true;
-    }
-  } catch {
-    console.log('Failed to load projects');
-  }
-  const allProjects = await models.project.all();
+  // Load all projects if the user is logged in
+  if (isLoggedIn() && !hasRun) {
+    try {
+      let vcs = getVCS();
+      if (!vcs) {
+        const driver = FileSystemDriver.create(
+          process.env['INSOMNIA_DATA_PATH'] || window.app.getPath('userData'),
+        );
 
-  const remoteOrgs = allProjects
-    .filter(isRemoteProject)
-    .map(({ _id, name }) => ({
-      _id,
-      name,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+        console.log('Initializing VCS');
+        vcs = await initVCS(driver, async conflicts => {
+          return new Promise(resolve => {
+            showModal(SyncMergeModal, {
+              conflicts,
+              handleDone: (conflicts?: MergeConflict[]) =>
+                resolve(conflicts || []),
+            });
+          });
+        });
+      }
+
+      const sessionId = getCurrentSessionId();
+
+      // Teams are now organizations
+      const response = await window.main.insomniaFetch<{
+        data: {
+          teams: Team[];
+        };
+        errors?: {
+          message: string;
+        }[];
+      }>({
+        method: 'POST',
+        path: '/graphql',
+        sessionId,
+        data: {
+          query: `
+          query {
+            teams {
+              id
+              name
+            }
+          }
+        `,
+          variables: {},
+        },
+      });
+
+      const teams = response.data.teams as Team[];
+
+      hasRun = true;
+      return {
+        organizations: [
+          defaultOrganization,
+          ...teams
+            .map(team => ({
+              _id: team.id,
+              name: team.name,
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        ],
+        settings: await models.settings.getOrCreate(),
+      };
+    } catch (err) {
+      console.log('Failed to load Teams', err);
+      return {
+        organizations: [defaultOrganization],
+        settings: await models.settings.getOrCreate(),
+      };
+    }
+  }
 
   return {
-    organizations: [defaultOrganization, ...remoteOrgs],
+    organizations: [defaultOrganization],
     settings: await models.settings.getOrCreate(),
   };
 };
@@ -133,7 +186,7 @@ const Root = () => {
   const { revalidate } = useRevalidator();
   const { organizations, settings } = useLoaderData() as RootLoaderData;
   const workspaceData = useRouteLoaderData(
-    ':workspaceId'
+    ':workspaceId',
   ) as WorkspaceLoaderData | null;
   const [importUri, setImportUri] = useState('');
   const patchSettings = useSettingsPatcher();
@@ -162,7 +215,7 @@ const Root = () => {
         if (isDevelopment()) {
           urlWithoutParams = urlWithoutParams.replace(
             'insomniadev://',
-            'insomnia://'
+            'insomnia://',
           );
         }
         switch (urlWithoutParams) {
@@ -228,12 +281,12 @@ const Root = () => {
                   const mainJsContent = `module.exports.themes = [${JSON.stringify(
                     parsedTheme,
                     null,
-                    2
+                    2,
                   )}];`;
                   await createPlugin(
                     `theme-${parsedTheme.name}`,
                     '0.0.1',
-                    mainJsContent
+                    mainJsContent,
                   );
                   patchSettings({ theme: parsedTheme.name });
                   await reloadPlugins();
@@ -253,7 +306,7 @@ const Root = () => {
                   title: 'Error authorizing GitHub',
                   message: error.message,
                 });
-              }
+              },
             );
             break;
           }
@@ -267,7 +320,7 @@ const Root = () => {
                   title: 'Error authorizing GitLab',
                   message: error.message,
                 });
-              }
+              },
             );
             break;
           }
@@ -281,7 +334,7 @@ const Root = () => {
             console.log(`Unknown deep link: ${url}`);
           }
         }
-      }
+      },
     );
   }, [patchSettings]);
 
@@ -290,6 +343,26 @@ const Root = () => {
     projectId?: string;
     workspaceId?: string;
   };
+
+  const [status, setStatus] = useState<'online' | 'offline' | 'unauthorized'>(
+    isLoggedIn() ? 'online' : 'unauthorized',
+  );
+
+  useEffect(() => {
+    const handleOnline = () => setStatus('online');
+    const handleOffline = () => setStatus('offline');
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    onLoginLogout(isLoggedIn => {
+      setStatus(status => (isLoggedIn ? status : 'unauthorized'));
+    });
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   const crumbs = workspaceData
     ? [
@@ -385,7 +458,7 @@ const Root = () => {
 
                           if (action === 'account-settings') {
                             window.main.openInBrowser(
-                              'https://app.insomnia.rest/app/account/'
+                              'https://app.insomnia.rest/app/account/',
                             );
                           }
                         }}
@@ -463,27 +536,45 @@ const Root = () => {
             </div>
             <Outlet />
             <div className="relative [grid-area:Statusbar] flex items-center justify-between overflow-hidden">
-              <TooltipTrigger>
-                <Button
-                  data-testid="settings-button"
-                  className="px-4 py-1 h-full flex items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] text-[--color-font] text-xs hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all"
-                  onPress={showSettingsModal}
-                >
-                  <Icon icon="gear" /> Preferences
-                </Button>
-                <Tooltip
-                  placement="top"
-                  offset={8}
-                  className="border flex items-center gap-2 select-none text-sm min-w-max border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] text-[--color-font] px-4 py-2 rounded-md overflow-y-auto max-h-[85vh] focus:outline-none"
-                >
-                  Preferences
-                  <Hotkey
-                    keyBindings={
-                      settings.hotKeyRegistry.preferences_showGeneral
-                    }
-                  />
-                </Tooltip>
-              </TooltipTrigger>
+              <div className="flex h-full">
+                <TooltipTrigger>
+                  <Button
+                    className="px-4 py-1 h-full flex items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] text-[--color-font] text-xs hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all"
+                    onPress={showSettingsModal}
+                  >
+                    <Icon icon="gear" /> Preferences
+                  </Button>
+                  <Tooltip
+                    placement="top"
+                    offset={8}
+                    className="border flex items-center gap-2 select-none text-sm min-w-max border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] text-[--color-font] px-4 py-2 rounded-md overflow-y-auto max-h-[85vh] focus:outline-none"
+                  >
+                    Preferences
+                    <Hotkey
+                      keyBindings={
+                        settings.hotKeyRegistry.preferences_showGeneral
+                      }
+                    />
+                  </Tooltip>
+                </TooltipTrigger>
+                <TooltipTrigger>
+                  <Button className="px-4 py-1 h-full flex items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] text-[--color-font] text-xs hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all">
+                    {status === 'unauthorized' && 'Log in to sync your data'}
+                    {status !== 'unauthorized' &&
+                      status.charAt(0).toUpperCase() + status.slice(1)}
+                  </Button>
+                  <Tooltip
+                    placement="top"
+                    offset={8}
+                    className="border flex items-center gap-2 select-none text-sm min-w-max border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] text-[--color-font] px-4 py-2 rounded-md overflow-y-auto max-h-[85vh] focus:outline-none"
+                  >
+                    You are{' '}
+                    {status === 'online'
+                      ? 'securely connected to Insomnia Cloud'
+                      : 'offline. Connect to sync your data.'}
+                  </Tooltip>
+                </TooltipTrigger>
+              </div>
               <Link>
                 <a
                   className="flex focus:outline-none focus:underline gap-1 items-center text-xs text-[--color-font] px-[--padding-md]"
