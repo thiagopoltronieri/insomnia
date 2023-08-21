@@ -286,7 +286,7 @@ const OrganizationRoute = () => {
                   {workspaceData && (
                     <Fragment>
                       <Breadcrumbs items={crumbs}>
-                        {item => (
+                        {(item) => (
                           <Item key={item.id} id={item.id}>
                             {item.node}
                           </Item>
@@ -294,7 +294,7 @@ const OrganizationRoute = () => {
                       </Breadcrumbs>
                       {isDesign(workspaceData?.activeWorkspace) && (
                         <nav className="flex rounded-full justify-between content-evenly font-semibold bg-[--hl-xs] p-[--padding-xxs]">
-                          {['spec', 'debug', 'test'].map(item => (
+                          {['spec', 'debug', 'test'].map((item) => (
                             <NavLink
                               key={item}
                               to={`/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/${item}`}
@@ -330,7 +330,7 @@ const OrganizationRoute = () => {
                         </Button>
                         <Popover className="min-w-max">
                           <Menu
-                            onAction={action => {
+                            onAction={(action) => {
                               if (action === 'logout') {
                                 logoutFetcher.submit(
                                   {},
@@ -394,17 +394,21 @@ const OrganizationRoute = () => {
                       <Icon icon="edit" />
                     </div>
                   </div>
-                  <div className="flex items-center px-[--padding-md] gap-[--padding-xs]">
-                    Welcome to the Scratch Pad. To get the most out of Insomnia
-                    <NavLink to="/auth/login" className="font-bold text-white">
-                      go to your projects →
+                  <div className="py-[--padding-xs] px-[--padding-md] gap-[--padding-xs]">
+                    Welcome to the local Scratch Pad. To get the most out of
+                    Insomnia and see your projects
+                    <NavLink
+                      to="/auth/login"
+                      className="font-bold text-white inline-flex"
+                    >
+                      login or create an account →
                     </NavLink>
                   </div>
                 </div>
               ) : null}
               <div className="[grid-area:Navbar]">
                 <nav className="flex flex-col items-center place-content-stretch gap-[--padding-md] w-full h-full overflow-y-auto py-[--padding-md]">
-                  {organizations.map(organization => (
+                  {organizations.map((organization) => (
                     <TooltipTrigger key={organization.id}>
                       <Link>
                         <NavLink
@@ -439,7 +443,7 @@ const OrganizationRoute = () => {
                     </Button>
                     <Popover placement="left" className="min-w-max">
                       <Menu
-                        onAction={action => {
+                        onAction={(action) => {
                           if (action === 'join-organization') {
                             window.main.openInBrowser(getLoginUrl());
                           }
