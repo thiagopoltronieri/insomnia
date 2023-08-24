@@ -2,12 +2,15 @@ import type { IRuleResult } from '@stoplight/spectral-core';
 import CodeMirror from 'codemirror';
 import { stat } from 'fs/promises';
 import path from 'path';
-import React, { createRef, FC, Fragment, useCallback, useEffect, useMemo } from 'react';
+import React, { createRef, FC, Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Breadcrumbs, Button, Item, Link, ListBox, Popover, Select, SelectValue } from 'react-aria-components';
 import {
   LoaderFunction,
+  NavLink,
   useFetcher,
   useLoaderData,
   useParams,
+  useRouteLoaderData,
 } from 'react-router-dom';
 import { useToggle } from 'react-use';
 import styled from 'styled-components';
@@ -17,6 +20,7 @@ import { parseApiSpec } from '../../common/api-specs';
 import { ACTIVITY_SPEC } from '../../common/constants';
 import { debounce } from '../../common/misc';
 import { ApiSpec } from '../../models/api-spec';
+import { Environment } from '../../models/environment';
 import * as models from '../../models/index';
 import { invariant } from '../../utils/invariant';
 import {
@@ -24,8 +28,12 @@ import {
   CodeEditorHandle,
 } from '../components/codemirror/code-editor';
 import { DesignEmptyState } from '../components/design-empty-state';
+import { WorkspaceDropdown } from '../components/dropdowns/workspace-dropdown';
 import { WorkspaceSyncDropdown } from '../components/dropdowns/workspace-sync-dropdown';
 import { ErrorBoundary } from '../components/error-boundary';
+import { Icon } from '../components/icon';
+import { CookiesModal } from '../components/modals/cookies-modal';
+import { WorkspaceEnvironmentsEditModal } from '../components/modals/workspace-environments-edit-modal';
 import { Notice, NoticeTable } from '../components/notice-table';
 import { SidebarLayout } from '../components/sidebar-layout';
 import { SpecEditorSidebar } from '../components/spec-editor/spec-editor-sidebar';
@@ -34,6 +42,7 @@ import {
   useActiveApiSpecSyncVCSVersion,
   useGitVCSVersion,
 } from '../hooks/use-vcs-version';
+import { WorkspaceLoaderData } from './workspace';
 const EmptySpaceHelper = styled.div({
   display: 'flex',
   alignItems: 'flex-start',
@@ -160,6 +169,23 @@ const Design: FC = () => {
     projectId: string;
     workspaceId: string;
   };
+  const {
+    activeProject,
+    activeEnvironment,
+    activeCookieJar,
+    subEnvironments,
+    baseEnvironment,
+  } = useRouteLoaderData(':workspaceId') as WorkspaceLoaderData;
+  const setActiveEnvironmentFetcher = useFetcher();
+  const environmentsList = [baseEnvironment, ...subEnvironments].map(e => ({
+    id: e._id,
+    name: e.name,
+    color: e.color,
+  }));
+
+  const [isCookieModalOpen, setIsCookieModalOpen] = useState(false);
+  const [isEnvironmentModalOpen, setEnvironmentModalOpen] = useState(false);
+
   const { apiSpec, lintMessages, rulesetPath } = useLoaderData() as LoaderData;
   const editor = createRef<CodeEditorHandle>();
 
@@ -234,47 +260,169 @@ const Design: FC = () => {
 
   return (
     <SidebarLayout
+      className='new-sidebar'
       renderPageSidebar={
-        apiSpec.contents ? (
-          <ErrorBoundary
-            invalidationKey={apiSpec.contents}
-            renderError={() => (
-              <div className="text-left margin pad">
-                <h4>
-                  An error occurred while trying to render your spec's
-                  navigation.
-                </h4>
-                <p>
-                  This navigation will automatically refresh, once you have a
-                  valid specification that can be rendered.
-                </p>
-              </div>
+        <div className="flex flex-1 flex-col overflow-hidden divide-solid divide-y divide-[--hl-md]">
+          <div className="flex flex-col items-start gap-2 justify-between p-[--padding-sm]">
+            <Breadcrumbs className='react-aria-Breadcrumbs pb-3 border-b border-solid border-[--hl-sm] font-bold flex py-[--padding-sm] w-full'>
+              <Item className="react-aria-Item outline-none data-[focused]:outline-none">
+                <Link data-testid="project" className="px-1 py-1 aspect-square flex flex-1 outline-none data-[focused]:outline-none items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm">
+                  <NavLink
+                    to={`/organization/${organizationId}/project/${activeProject._id}`}
+                  >
+                    <Icon className='text-xs' icon="chevron-left" />
+                  </NavLink>
+                </Link>
+              </Item>
+              <Item>
+                <WorkspaceDropdown />
+              </Item>
+            </Breadcrumbs>
+            <div className="flex w-full items-center gap-2 justify-between">
+              <Select
+                aria-label="Select an environment"
+                onSelectionChange={environmentId => {
+                  setActiveEnvironmentFetcher.submit(
+                    {
+                      environmentId,
+                    },
+                    {
+                      method: 'POST',
+                      action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/set-active`,
+                    }
+                  );
+                }}
+                selectedKey={activeEnvironment._id}
+                items={environmentsList}
+              >
+                <Button className="px-4 py-1 flex flex-1 items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm">
+                  <SelectValue<Environment> className="flex truncate items-center justify-center gap-2">
+                    {({ isPlaceholder, selectedItem }) => {
+                      if (
+                        isPlaceholder ||
+                        (selectedItem &&
+                          selectedItem._id === baseEnvironment._id) ||
+                        !selectedItem
+                      ) {
+                        return (
+                          <Fragment>
+                            <Icon icon="cancel" />
+                            No Environment
+                          </Fragment>
+                        );
+                      }
+
+                      return (
+                        <Fragment>
+                          <Icon
+                            icon="circle"
+                            style={{
+                              color: selectedItem.color ?? 'var(--color-font)',
+                            }}
+                          />
+                          {selectedItem.name}
+                        </Fragment>
+                      );
+                    }}
+                  </SelectValue>
+                  <Icon icon="caret-down" />
+                </Button>
+                <Popover className="min-w-max">
+                  <ListBox<Environment>
+                    key={activeEnvironment._id}
+                    className="border select-none text-sm min-w-max border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] py-2 rounded-md overflow-y-auto max-h-[85vh] focus:outline-none"
+                  >
+                    {item => (
+                      <Item
+                        id={item._id}
+                        key={item._id}
+                        className="flex gap-2 px-[--padding-md] aria-selected:font-bold items-center text-[--color-font] h-[--line-height-xs] w-full text-md whitespace-nowrap bg-transparent hover:bg-[--hl-sm] disabled:cursor-not-allowed focus:bg-[--hl-xs] focus:outline-none transition-colors"
+                        aria-label={item.name}
+                        textValue={item.name}
+                        value={item}
+                      >
+                        {({ isSelected }) => (
+                          <Fragment>
+                            <Icon
+                              icon={
+                                item._id === baseEnvironment._id
+                                  ? 'cancel'
+                                  : 'circle'
+                              }
+                              style={{
+                                color: item.color ?? 'var(--color-font)',
+                              }}
+                            />
+                            <span>
+                              {item._id === baseEnvironment._id
+                                ? 'No Environment'
+                                : item.name}
+                            </span>
+                            {isSelected && (
+                              <Icon
+                                icon="check"
+                                className="text-[--color-success] justify-self-end"
+                              />
+                            )}
+                          </Fragment>
+                        )}
+                      </Item>
+                    )}
+                  </ListBox>
+                </Popover>
+              </Select>
+              <Button
+                aria-label='Manage Environments'
+                onPress={() => setEnvironmentModalOpen(true)}
+                className="flex flex-shrink-0 items-center justify-center aspect-square h-full aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+              >
+                <Icon icon="gear" />
+              </Button>
+            </div>
+            <Button
+              onPress={() => setIsCookieModalOpen(true)}
+              className="px-4 py-1 flex-1 flex items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+            >
+              <Icon icon="cookie-bite" />
+              {activeCookieJar.cookies.length === 0 ? 'Add' : 'Manage'} Cookies
+            </Button>
+          </div>
+          <div className='flex-1'>
+            {apiSpec.contents ? (
+              <ErrorBoundary
+                invalidationKey={apiSpec.contents}
+                renderError={() => (
+                  <div className="text-left margin pad">
+                    <h4>
+                      An error occurred while trying to render your spec's
+                      navigation.
+                    </h4>
+                    <p>
+                      This navigation will automatically refresh, once you have a
+                      valid specification that can be rendered.
+                    </p>
+                  </div>
+                )}
+              >
+                <SpecEditorSidebar
+                  apiSpec={apiSpec}
+                  handleSetSelection={handleScrollToSelection}
+                />
+              </ErrorBoundary>
+            ) : (
+                <EmptySpaceHelper>A spec navigator will render here</EmptySpaceHelper>
             )}
-          >
-            <SpecEditorSidebar
-              apiSpec={apiSpec}
-              handleSetSelection={handleScrollToSelection}
+          </div>
+          <WorkspaceSyncDropdown />
+          {isEnvironmentModalOpen && (
+            <WorkspaceEnvironmentsEditModal
+              onHide={() => setEnvironmentModalOpen(false)}
             />
-            <div
-              style={{
-                gridRowStart: 6,
-              }}
-            >
-              <WorkspaceSyncDropdown />
-            </div>
-          </ErrorBoundary>
-        ) : (
-          <Fragment>
-            <EmptySpaceHelper>A spec navigator will render here</EmptySpaceHelper>
-            <div
-              style={{
-                gridRowStart: 6,
-              }}
-            >
-              <WorkspaceSyncDropdown />
-            </div>
-          </Fragment>
-        )
+          )}
+          {isCookieModalOpen && (
+            <CookiesModal onHide={() => setIsCookieModalOpen(false)} />
+          )}
+        </div>
       }
       renderPaneTwo={showRightPane && <SwaggerUIDiv text={apiSpec.contents} />}
       renderPaneOne={
