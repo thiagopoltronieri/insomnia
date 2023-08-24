@@ -2,8 +2,8 @@ import React, { FC, Fragment, useState } from 'react';
 import { useFetcher } from 'react-router-dom';
 
 import { toKebabCase } from '../../../common/misc';
-import { strings } from '../../../common/strings';
 import {
+  isDefaultOrganizationProject,
   Project,
 } from '../../../models/project';
 import { Dropdown, DropdownButton, DropdownItem, ItemContent } from '../base/dropdown';
@@ -22,13 +22,42 @@ export const ProjectDropdown: FC<Props> = ({ project, organizationId }) => {
       <Dropdown
         aria-label='Project Dropdown'
         dataTestId={toKebabCase(`ProjectDropDown-${project.name}`)}
+        items={[{
+          label: 'Settings',
+          icon: 'gear',
+          onClick: () => setIsSettingsModalOpen(true),
+        }, ...isDefaultOrganizationProject(project) ? [] : [{
+          label: 'Delete',
+          icon: 'trash-o',
+          className: 'danger',
+          withPrompt: true,
+          onClick: () =>
+            deleteProjectFetcher.submit(
+              {},
+              { method: 'post', action: `/organization/${organizationId}/project/${project._id}/delete` }
+            ),
+        }]]}
         triggerButton={
           <DropdownButton className="row" title={project.name}>
             <i className="fa fa-ellipsis space-left" />
           </DropdownButton>
         }
       >
-        <DropdownItem aria-label={`${strings.project.singular} Settings`}>
+        {(item => {
+          return (
+            <DropdownItem key={item.label} aria-label={item.label}>
+              <ItemContent
+                icon={item.icon}
+                style={{ gap: 'var(--padding-sm)' }}
+                iconStyle={{ width: 'unset', fill: 'var(--hl)' }}
+                label={item.label}
+                withPrompt={item.withPrompt}
+                onClick={item.onClick}
+              />
+            </DropdownItem>
+          );
+        })}
+        {/* <DropdownItem aria-label={`${strings.project.singular} Settings`}>
           <ItemContent
             icon="gear"
             style={{ gap: 'var(--padding-sm)' }}
@@ -50,7 +79,7 @@ export const ProjectDropdown: FC<Props> = ({ project, organizationId }) => {
               )
             }
           />
-        </DropdownItem>
+        </DropdownItem> */}
       </Dropdown>
       {isSettingsModalOpen && (
         <ProjectSettingsModal

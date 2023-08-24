@@ -665,6 +665,8 @@ export const indexLoader: LoaderFunction = async ({ params }) => {
         }
       }
 
+      console.log('Redirecting to last visited project', projectId);
+
       return redirect(`/organization/${match?.params.organizationId}/project/${projectId}`);
     }
   }
@@ -694,6 +696,8 @@ export const indexLoader: LoaderFunction = async ({ params }) => {
       )));
 
     await database.batchModifyDocs({ upsert: projectsToUpdate });
+
+    console.log('Redirecting to first remote project', projectsToUpdate[0]._id);
 
     return redirect(`/organization/${organizationId}/project/${projectsToUpdate[0]._id}`);
   } catch (err) {
@@ -747,7 +751,7 @@ export const loader: LoaderFunction = async ({
         )));
 
     await database.batchModifyDocs({ upsert: projectsToUpdate });
-
+    console.log('Updated remote projects', projectsToUpdate.length);
     if (!projectId || projectId === 'undefined') {
       projectId = remoteProjects[0].id;
     }
