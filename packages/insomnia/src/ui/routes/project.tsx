@@ -71,9 +71,9 @@ import { WorkspaceCard } from '../components/workspace-card';
 import { usePresenceContext } from '../context/app/presence-context';
 import { OrganizationLoaderData } from './organization';
 
-async function getAllTeamProjects(teamId: string) {
+async function getAllTeamProjects(organizationId: string) {
   const sessionId = getCurrentSessionId() || '';
-
+  console.log('Fetching projects for team', organizationId);
   if (!sessionId) {
     return [];
   }
@@ -84,7 +84,7 @@ async function getAllTeamProjects(teamId: string) {
       name: string;
     }[];
   }>({
-    path: `/v1/teams/${teamId}/team-projects`,
+    path: `/v1/teams/${organizationId}/team-projects`,
     method: 'GET',
     sessionId,
   });
@@ -725,40 +725,13 @@ export const loader: LoaderFunction = async ({
   }
   const search = new URL(request.url).searchParams;
   const { organizationId } = params;
-  let { projectId } = params;
+  const { projectId } = params;
   invariant(organizationId, 'Organization ID is required');
   invariant(projectId, 'projectId parameter is required');
   const sortOrder = search.get('sortOrder') || 'modified-desc';
   const filter = search.get('filter') || '';
   const scope = search.get('scope') || 'all';
   const projectName = search.get('projectName') || '';
-
-  try {
-    console.log('Fetching projects for team', organizationId);
-    const remoteProjects = await getAllTeamProjects(organizationId);
-
-    const projectsToUpdate = await Promise.all(remoteProjects.map(async (prj: {
-      id: string;
-      name: string;
-    }) => models.initModel<RemoteProject>(
-          models.project.type,
-          {
-            _id: prj.id,
-            remoteId: prj.id,
-            name: prj.name,
-            parentId: organizationId,
-          }
-        )));
-
-    await database.batchModifyDocs({ upsert: projectsToUpdate });
-    console.log('Updated remote projects', projectsToUpdate.length);
-    if (!projectId || projectId === 'undefined') {
-      projectId = remoteProjects[0].id;
-    }
-  } catch (err) {
-    console.log(err);
-    throw redirect('/organization');
-  }
 
   const project = await models.project.getById(projectId);
   invariant(project, 'Project was not found');
